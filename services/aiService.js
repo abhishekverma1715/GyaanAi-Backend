@@ -116,13 +116,14 @@ function buildMessages(conversationHistory, userMessage, liveContext, queryType)
 // ── Gemini call ────────────────────────────────────────────────────────────────
 async function callGemini(messages) {
   const key   = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const rawModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const model    = rawModel.includes('2.5') ? 'gemini-1.5-flash' : rawModel;
   const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
 
   const res = await axios.post(url, {
     contents: messages,
     generationConfig: { temperature: 0.7, maxOutputTokens: 2048, topK: 40, topP: 0.95 },
-  }, { timeout: 25000 });
+  }, { timeout: 12000 });
 
   return res.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'No response generated.';
 }
@@ -166,9 +167,10 @@ async function callMock(queryType) {
 
 // ── STREAMING RESPONSE (SSE) ───────────────────────────────────────────────────
 async function streamGemini(messages, res) {
-  const key   = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
+  const key      = process.env.GEMINI_API_KEY;
+  const rawModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  const model    = rawModel.includes('2.5') ? 'gemini-1.5-flash' : rawModel;
+  const url      = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
 
   try {
     const response = await axios.post(url, {
@@ -176,7 +178,7 @@ async function streamGemini(messages, res) {
       generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
     }, {
       responseType: 'stream',
-      timeout: 30000,
+      timeout: 15000,
     });
 
     let fullText = '';
