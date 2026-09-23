@@ -116,8 +116,7 @@ function buildMessages(conversationHistory, userMessage, liveContext, queryType)
 // ── Gemini call ────────────────────────────────────────────────────────────────
 async function callGemini(messages) {
   const key   = process.env.GEMINI_API_KEY;
-  const rawModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-  const model    = rawModel.includes('2.5') ? 'gemini-1.5-flash' : rawModel;
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
   const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
 
   const res = await axios.post(url, {
@@ -167,10 +166,9 @@ async function callMock(queryType) {
 
 // ── STREAMING RESPONSE (SSE) ───────────────────────────────────────────────────
 async function streamGemini(messages, res) {
-  const key      = process.env.GEMINI_API_KEY;
-  const rawModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-  const model    = rawModel.includes('2.5') ? 'gemini-1.5-flash' : rawModel;
-  const url      = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
+  const key   = process.env.GEMINI_API_KEY;
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
 
   try {
     const response = await axios.post(url, {
