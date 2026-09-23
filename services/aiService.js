@@ -88,6 +88,15 @@ async function fetchLiveContext(queryMeta, text) {
   return ctx;
 }
 
+// Helper: is the live context actually useful (not mock/empty)?
+function isUsableLiveContext(ctx) {
+  if (!ctx || !ctx.data) return false;
+  if (ctx.data.isMock) return false;
+  if (ctx.formatted && ctx.formatted.includes('No live search results available')) return false;
+  if (ctx.formatted && ctx.formatted.includes('Configure ')) return false;
+  return true;
+}
+
 // ── Build messages array for AI ────────────────────────────────────────────────
 function buildMessages(conversationHistory, userMessage, liveContext, queryType) {
   const systemContent = BASE_SYSTEM + (MODE_PROMPTS[queryType] || MODE_PROMPTS.general);
@@ -103,10 +112,10 @@ function buildMessages(conversationHistory, userMessage, liveContext, queryType)
     });
   });
 
-  // Inject live context into user message
+  // Only inject live context if it's real data (not mock/fallback)
   let finalUserMessage = userMessage;
-  if (liveContext?.formatted) {
-    finalUserMessage = `${liveContext.formatted}\n\n---\nUser Question: ${userMessage}\n\nUsing ONLY the above live data, answer the user's question comprehensively.`;
+  if (liveContext && isUsableLiveContext(liveContext)) {
+    finalUserMessage = `${liveContext.formatted}\n\n---\nUser Question: ${userMessage}\n\nUsing the above live data as context, answer the user's question comprehensively.`;
   }
 
   messages.push({ role: 'user', parts: [{ text: finalUserMessage }] });
@@ -115,21 +124,33 @@ function buildMessages(conversationHistory, userMessage, liveContext, queryType)
 
 // ── Gemini call ────────────────────────────────────────────────────────────────
 async function callGemini(messages) {
-  const key   = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-  const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+  const key    = process.env.GEMINI_API_KEY;
+  const models = [process.env.GEMINI_MODEL || 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
+  const uniqueModels = [...new Set(models)];
 
-  const res = await axios.post(url, {
-    contents: messages,
-    generationConfig: { temperature: 0.7, maxOutputTokens: 2048, topK: 40, topP: 0.95 },
-  }, { timeout: 12000 });
+  let lastErr = null;
+  for (const model of uniqueModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+      const res = await axios.post(url, {
+        contents: messages,
+        generationConfig: { temperature: 0.7, maxOutputTokens: 2048, topK: 40, topP: 0.95 },
+      }, { timeout: 25000 });
 
-  return res.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'No response generated.';
+      return res.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'No response generated.';
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[Gemini:${model}] ${err.response?.status || err.message}, trying fallback if available...`);
+    }
+  }
+
+  throw lastErr;
 }
 
 // ── OpenAI call ────────────────────────────────────────────────────────────────
 async function callOpenAI(conversationHistory, userMessage, liveContext, queryType) {
-  const systemContent = BASE_SYSTEM + (MODE_PROMPTS[queryType] || MODE_PROMPTS.general);
+  const effectiveType = isUsableLiveContext(liveContext) ? queryType : 'general';
+  const systemContent = BASE_SYSTEM + (MODE_PROMPTS[effectiveType] || MODE_PROMPTS.general);
   const apiMessages   = [{ role: 'system', content: systemContent }];
 
   conversationHistory.slice(-10).forEach(m => {
@@ -137,7 +158,9 @@ async function callOpenAI(conversationHistory, userMessage, liveContext, queryTy
   });
 
   let finalUser = userMessage;
-  if (liveContext?.formatted) finalUser = `${liveContext.formatted}\n\nUser Question: ${userMessage}`;
+  if (liveContext && isUsableLiveContext(liveContext)) {
+    finalUser = `${liveContext.formatted}\n\nUser Question: ${userMessage}`;
+  }
   apiMessages.push({ role: 'user', content: finalUser });
 
   const res = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -167,7 +190,7 @@ async function callMock(queryType) {
 // ── STREAMING RESPONSE (SSE) ───────────────────────────────────────────────────
 async function streamGemini(messages, res) {
   const key   = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${key}&alt=sse`;
 
   try {
@@ -176,7 +199,7 @@ async function streamGemini(messages, res) {
       generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
     }, {
       responseType: 'stream',
-      timeout: 15000,
+      timeout: 25000,
     });
 
     let fullText = '';
@@ -228,8 +251,11 @@ async function generateResponse(userMessage, conversationHistory = []) {
     liveContext = await fetchLiveContext(queryMeta, userMessage);
   }
 
+  const hasLive = isUsableLiveContext(liveContext);
+
   // Build messages for AI
-  const messages = buildMessages(conversationHistory, userMessage, liveContext, queryMeta.type);
+  const effectiveType = hasLive ? queryMeta.type : 'general';
+  const messages = buildMessages(conversationHistory, userMessage, liveContext, effectiveType);
 
   // Call the appropriate AI provider
   const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
@@ -249,9 +275,9 @@ async function generateResponse(userMessage, conversationHistory = []) {
 
   return {
     text,
-    queryType:  queryMeta.type,
-    sources:    liveContext?.sources || [],
-    liveData:   !!liveContext?.data,
+    queryType:  hasLive ? queryMeta.type : 'general',
+    sources:    hasLive ? (liveContext?.sources || []) : [],
+    liveData:   hasLive,
   };
 }
 
@@ -262,11 +288,15 @@ async function streamResponse(userMessage, conversationHistory, res) {
 
   if (queryMeta.needsLiveData) {
     liveContext = await fetchLiveContext(queryMeta, userMessage);
-    // Send live context metadata first
-    res.write(`data: ${JSON.stringify({ meta: { queryType: queryMeta.type, liveData: true, sources: liveContext?.sources || [] } })}\n\n`);
+    // Only tell the client we have live data if it's actually real (not mock)
+    if (isUsableLiveContext(liveContext)) {
+      res.write(`data: ${JSON.stringify({ meta: { queryType: queryMeta.type, liveData: true, sources: liveContext?.sources || [] } })}\n\n`);
+    }
   }
 
-  const messages = buildMessages(conversationHistory, userMessage, liveContext, queryMeta.type);
+  const hasLive = isUsableLiveContext(liveContext);
+  const effectiveType = hasLive ? queryMeta.type : 'general';
+  const messages = buildMessages(conversationHistory, userMessage, liveContext, effectiveType);
   const provider = (process.env.AI_PROVIDER || 'gemini').toLowerCase();
 
   if (provider === 'gemini') {

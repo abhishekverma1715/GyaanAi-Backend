@@ -35,10 +35,10 @@ const PATTERNS = {
     /\b(calculate|solve|equation|formula|integral|derivative|matrix|probability|statistics)\b/i,
     /\b(what is \d+|how much is \d+|\d+\s*[+\-*/]\s*\d+)\b/i,
   ],
+  // ONLY trigger live search for genuinely real-time requests — NOT general knowledge
   search: [
-    /\b(who is|what is|when did|where is|how did|tell me about|explain)\b/i,
-    /\b(latest|recent|new|current|now|today|2024|2025)\b/i,
-    /\b(find|search|look up|research)\b/i,
+    /\b(latest|recent|right now|as of today|this week|live update)\b/i,
+    /\b(find online|search|look up|google|browse)\b/i,
   ],
 };
 
@@ -86,7 +86,8 @@ function classifyQuery(text) {
     confidence: topScore,
     city,
     keywords: keywords.slice(0, 6),
-    needsLiveData: ['weather','news','sports','finance','search'].includes(type),
+    // needsLiveData only true when we have real patterns matched AND it's a live-data type
+    needsLiveData: ['weather','news','sports','finance','search'].includes(type) && topScore > 0,
   };
 }
 
